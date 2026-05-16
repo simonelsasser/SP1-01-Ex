@@ -1,0 +1,1 @@
+pip install pandas numpy seaborn matplotlib scipy pydeseq2 gprofiler adjustText
