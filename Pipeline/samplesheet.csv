@@ -1,0 +1,3 @@
+sample,fastq_1,fastq_2,strandedness
+H9_naive_none_R1,fastq/GSM5823919_1.fastq.gz,fastq/GSM5823919_2.fastq.gz,auto
+H9_naive_EZH2i_R1,fastq/GSM5823922_1.fastq.gz,fastq/GSM5823922_2.fastq.gz,auto
