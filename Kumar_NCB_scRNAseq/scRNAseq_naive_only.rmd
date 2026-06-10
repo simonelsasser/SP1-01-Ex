@@ -1,0 +1,318 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r}
+# Install if needed
+install.packages(c("Seurat", "patchwork", "ggplot2"))
+
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install(c(
+    "slingshot",
+    "SingleCellExperiment",
+    "tradeSeq"
+))
+```
+```{r}
+library(Seurat)
+library(ggplot2)
+library(patchwork)
+library(Matrix)
+library(SingleCellExperiment)
+library(slingshot)
+library(tradeSeq)
+```
+
+```{bash}
+# ============================================
+# Download data from GEO
+# ============================================ 
+#tar -xvf GSE196280.tar --directory data/
+```
+
+```{r}
+data_dir <- "data"
+
+# Find all matrix.mtx.gz files
+mtx_files <- list.files(
+  path = data_dir,
+  pattern = "matrix.mtx.gz$",
+  recursive = TRUE,
+  full.names = TRUE
+)
+
+mtx_files<- mtx_files[grep("Naive",mtx_files)]
+
+seurat_list <- list()
+
+for (mtx in mtx_files) {
+
+  sample_dir <- dirname(mtx)
+
+  sample_name <- basename(sample_dir)
+
+  counts <- Read10X(data.dir = sample_dir)
+
+  if (is.list(counts)) {
+    counts <- counts[["Gene Expression"]]
+  }
+  
+  seu <- CreateSeuratObject(
+    counts = counts,
+    project = sample_name,
+    min.cells = 3,
+    min.features = 200
+  )
+
+  seu$sample <- sample_name
+
+  seurat_list[[sample_name]] <- seu
+}
+```
+
+```{r}
+seurat_list <- lapply(
+  seurat_list,
+  function(x) {
+
+    x <- NormalizeData(x)
+
+    x <- FindVariableFeatures(
+      x,
+      selection.method = "vst",
+      nfeatures = 2000
+    )
+
+    return(x)
+  }
+)
+features <- SelectIntegrationFeatures(
+  object.list = seurat_list,
+  nfeatures = 3000
+)
+anchors <- FindIntegrationAnchors(
+  object.list = seurat_list,
+  anchor.features = features
+)
+combined <- IntegrateData(
+  anchorset = anchors
+)
+```
+
+```{r}
+#combined <- merge(
+#  x = seurat_list[[1]],
+#  y = seurat_list[-1],
+#  add.cell.ids = names(seurat_list),
+#  project = "combined_scRNA"
+#)
+
+combined
+```
+
+```{r}
+combined[["percent.mt"]] <- PercentageFeatureSet(
+  combined,
+  pattern = "^MT-"
+)
+```
+
+```{r}
+VlnPlot(
+  combined,
+  features = c(
+    "nFeature_RNA",
+    "nCount_RNA",
+    "percent.mt"
+  ),
+  ncol = 3
+)
+
+FeatureScatter(
+  combined,
+  feature1 = "nCount_RNA",
+  feature2 = "nFeature_RNA"
+)
+```
+
+```{r}
+combined <- subset(
+  combined,
+  subset =
+    nFeature_RNA > 200 &
+    percent.mt < 10
+)
+```
+
+```{r}
+#combined <- NormalizeData(
+#  combined,
+#  normalization.method = "LogNormalize",
+#  scale.factor = 10000
+#)
+```
+
+```{r}
+#combined <- FindVariableFeatures(
+#  combined,
+#  selection.method = "vst",
+#  nfeatures = 2000
+#)
+
+VariableFeaturePlot(combined)
+```
+
+```{r}
+combined <- ScaleData(combined)
+```
+
+```{r}
+combined <- RunPCA(
+  combined,
+  features = VariableFeatures(combined)
+)
+
+ElbowPlot(combined)
+
+DimPlot(
+  combined,
+  reduction = "pca",
+  group.by = "sample"
+)
+
+DimPlot(
+  combined,
+  reduction = "pca",
+  group.by = "sample",dims = c(2,3)
+)
+
+DimPlot(
+  combined,
+  reduction = "pca",
+  group.by = "sample",dims = c(3,4)
+)
+```
+
+```{r}
+DefaultAssay(combined) <- "integrated"
+combined <- FindNeighbors(
+  combined,
+  dims = 1:30,
+  k.param = 15
+)
+
+combined <- FindClusters(
+  combined,
+  resolution = 0.3,
+)
+```
+
+```{r}
+DefaultAssay(combined) <- "RNA"
+combined <- RunUMAP(
+  combined,
+  dims = 1:30
+)
+
+DimPlot(
+  combined,
+  reduction = "umap",
+  group.by = "sample"
+)
+
+DimPlot(
+  combined,
+  reduction = "umap",
+  label = TRUE
+)
+```
+
+```{r fig.width=16, fig.height=16}
+marker_genes <- c(
+  "SOX2",
+  "NANOG",
+  "GATA3",
+  "CLDN4",
+  "TP63",
+  "TMEM88",
+  "KRT18",
+  "TBXT",
+  "SOX9"
+)
+
+FeaturePlot(
+  combined,
+  features = marker_genes,
+  ncol = 3
+)
+```
+
+```{r}
+library("tidyr")
+library("dplyr")
+DefaultAssay(combined) <- "RNA"
+combined <- JoinLayers(combined)
+
+
+
+markers <- FindAllMarkers(
+  combined,logfc.threshold = 1.8,
+  return.thresh = 0.05,
+  min.pct = 0.1,
+  only.pos = TRUE,
+  test.use = "wilcox",
+)
+
+top5 <- markers %>%
+  group_by(cluster) %>%
+  slice_max(order_by = avg_log2FC, n = 5) %>%
+  ungroup() %>% select(gene)
+
+top5
+```
+```{r}
+DotPlot(
+  combined,
+  features = top5,
+) + RotatedAxis()
+```
+
+```{r}
+DotPlot(
+  combined,
+  features = marker_genes,
+) + RotatedAxis()
+```
+
+```{r}
+sce <- as.SingleCellExperiment(combined)
+sce <- slingshot(
+  sce,
+  clusterLabels = 'seurat_clusters',
+  reducedDim = 'UMAP'
+)
+```
+
+```{r}
+combined$pseudotime <- slingPseudotime(sce)[,1]
+FeaturePlot(
+  combined,
+  features = "pseudotime"
+)
+```
+
+```{r}
+saveRDS(
+  combined,
+  file = "combined_scRNAseq.rds"
+)
+```
+
+
